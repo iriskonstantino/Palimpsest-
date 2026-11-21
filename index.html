@@ -85,6 +85,24 @@ select:focus,input:focus,textarea:focus{outline:1px solid var(--gilt);border-col
 .card .ca{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
 .card.done{opacity:.55}
 mark{background:rgba(201,164,92,.28);color:var(--gilt2);border-radius:3px}
+/* reader */
+.rdbar{display:flex;align-items:center;gap:2px;padding:8px 8px;flex:none}
+.rdbar button{color:var(--dim);font-size:14px;padding:8px 11px;border-radius:9px}
+.rdbar button:active{background:var(--raise)}
+.rdbar .sp{flex:1}
+.rdbar .pos{font-size:12px;color:var(--dim);padding:0 8px}
+main.reader{padding:0 24px calc(34px + var(--sab))}
+.rd{max-width:33rem;margin:0 auto;font-family:var(--serif);line-height:1.72;color:#e2d8c6}
+.rd h1{font-weight:400;font-style:italic;text-align:center;font-size:1.45em;color:var(--gilt2);margin:1.5em 0 1.5em;line-height:1.3}
+.rd h1.part{font-style:normal;text-transform:uppercase;letter-spacing:.16em;font-size:1.15em;margin:28vh 0 0}
+.rd p{margin:0;text-indent:1.5em;text-align:justify;-webkit-hyphens:auto;hyphens:auto}
+.rd p:first-of-type{text-indent:0}
+.rd sup.fn{color:var(--gilt);cursor:pointer;font-size:.72em;padding:.2em .35em;font-weight:700;vertical-align:super;line-height:0}
+.rd .end{text-align:center;color:var(--dim);margin:2.2em 0 .6em;letter-spacing:.6em;font-size:.8em}
+.rdnav{display:flex;justify-content:space-between;gap:10px;max-width:33rem;margin:1.2em auto 0;font-family:var(--sans);font-size:13px}
+.rdnav button{color:var(--dim);text-align:left;padding:10px 2px;max-width:46%;line-height:1.3}
+.rdnav button:last-child{text-align:right;margin-left:auto}
+.rdnav button:active{color:var(--gilt2)}
 /* modal */
 .mback{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:20;padding-top:var(--sat)}
 .mbox{width:100%;max-width:520px;max-height:92dvh;overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:18px 18px 0 0;padding:18px 16px calc(16px + var(--sab))}
@@ -134,7 +152,7 @@ function $(s){return document.querySelector(s)}
 function fmtN(n){return n.toLocaleString('en-US')}
 
 /* ---------- state ---------- */
-var S={book:{title:'Untitled Book',orders:[],active:null,updated:0},frags:{},res:{},view:'binder',cur:null,wtab:'text',editOrder:false,rfilter:'all',q:''};
+var S={mode:'read',rsize:20,book:{title:'Untitled Book',orders:[],active:null,updated:0},frags:{},res:{},view:'binder',cur:null,wtab:'text',editOrder:false,rfilter:'all',q:''};
 var sel={s:0,e:0};
 var dirty={meta:false,f:new Set(),r:new Set(),del:new Set()};
 var store=null, syncState='local', syncMsg='';
@@ -454,8 +472,19 @@ document.addEventListener('selectionchange',function(){if(document.activeElement
 /* ---------- rendering ---------- */
 var main=function(){return $('#main')};
 
+function ensureCur(){
+  if(S.view==='write'&&!(S.cur&&S.frags[S.cur])){
+    var o=activeOrder(),first=o.ids.filter(function(id){return S.frags[id]})[0];
+    if(first)S.cur=first;
+  }
+}
 function render(){
+  ensureCur();
   var v=S.view,body='';
+  if(v==='write'&&S.mode==='read'&&S.cur&&S.frags[S.cur]){
+    $('#app').innerHTML=readerPage(S.frags[S.cur]);
+    return;
+  }
   var flexCls=(v==='write'&&S.cur&&S.wtab==='text')?' flex':'';
   if(v==='binder')body=viewBinder();
   else if(v==='write')body=viewWrite();
@@ -470,6 +499,51 @@ function render(){
   if(v==='write')bindWrite();
   if(v==='search')bindSearch();
   if(v==='binder')bindBinder();
+}
+
+/* ---------- reader ---------- */
+function readerBody(f){
+  var marks={};
+  (f.anchors||[]).forEach(function(a){if(a.kind==='footnote'&&!a.lost&&S.frags[a.child]&&f.body.charAt(a.a)==='†')marks[a.a]=a.child});
+  var pos=0,out='';
+  f.body.split('\n').forEach(function(line){
+    var html='',last=0;
+    for(var i=0;i<line.length;i++){
+      var c=marks[pos+i];
+      if(c){html+=esc(line.slice(last,i))+'<sup class="fn" data-act="fn" data-id="'+c+'">†</sup>';last=i+1}
+    }
+    html+=esc(line.slice(last));
+    if(line.trim())out+='<p>'+html+'</p>';
+    pos+=line.length+1;
+  });
+  return out;
+}
+function readerPage(f){
+  var o=activeOrder(),idx=o.ids.indexOf(f.id),prev=null,next=null;
+  if(idx>=0){prev=S.frags[o.ids[idx-1]]||null;next=S.frags[o.ids[idx+1]]||null}
+  var isFn=f.kind==='footnote';
+  var back=isFn&&f.parent&&S.frags[f.parent]?'‹ Text':'‹ Binder';
+  var pos=idx>=0?'<span class="pos">'+(idx+1)+' / '+o.ids.length+'</span>':'';
+  var bar='<div class="rdbar"><button data-act="rdback">'+back+'</button><span class="sp"></span>'+pos+'<button data-act="rdsize" data-d="-1" aria-label="Smaller text">A−</button><button data-act="rdsize" data-d="1" aria-label="Larger text">A+</button><button data-act="edit">Edit</button></div>';
+  var title=f.kind==='part'?'<h1 class="part">'+esc(f.title||'Part')+'</h1>':(f.title&&!isFn?'<h1>'+esc(f.title)+'</h1>':(isFn?'<h1>†</h1>':'<div style="height:1.4em"></div>'));
+  var text=f.body.trim()?readerBody(f):(f.kind==='part'?'':'<p style="text-indent:0;color:var(--dim);text-align:center;font-style:italic">Nothing written yet. Tap Edit.</p>');
+  var nav='<div class="rdnav">'+(prev?'<button data-act="open" data-id="'+prev.id+'">‹ '+esc(prev.title||'Untitled')+'</button>':'<span></span>')+(next?'<button data-act="open" data-id="'+next.id+'">'+esc(next.title||'Untitled')+' ›</button>':'')+'</div>';
+  return bar+'<main id="main" class="reader"><article class="rd" style="font-size:'+S.rsize+'px">'+title+text+(f.kind==='part'||isFn?'':'<div class="end">❦</div>')+'</article>'+(isFn?'':nav)+'</main>';
+}
+function fnSheet(id){
+  var c=S.frags[id];if(!c)return;
+  var m=$('#modal');
+  m.innerHTML='<div class="mback"><div class="mbox"><div class="rd" style="font-size:'+Math.max(16,S.rsize-2)+'px"><div style="color:var(--gilt);font-weight:700;margin-bottom:.3em">†</div>'+(c.body.trim()?readerBody(c):'<p style="text-indent:0;color:var(--dim);font-style:italic">Empty footnote.</p>')+'</div><div class="mbtns"><button type="button" class="ghost" data-x="1">Close</button><button type="button" class="ghost" data-ed="1">Edit</button></div></div></div>';
+  var back=m.querySelector('.mback');
+  back.addEventListener('click',function(e){
+    if(e.target===back||e.target.closest('[data-x]'))closeModal();
+    else if(e.target.closest('[data-ed]')){closeModal();openFrag(id,true)}
+  });
+}
+function setRsize(d){
+  S.rsize=Math.max(15,Math.min(32,S.rsize+d));
+  try{localStorage.setItem('palimpsest.rsize',String(S.rsize))}catch(e){}
+  var a=document.querySelector('.rd');if(a)a.style.fontSize=S.rsize+'px';
 }
 
 function fragRow(f,mode,idx,len){
@@ -522,10 +596,10 @@ function viewWrite(){
   }
   var chain=[],p=f;
   while(p&&p.parent&&S.frags[p.parent]){p=S.frags[p.parent];chain.unshift(p)}
-  var crumbs=chain.length?'<div class="crumbs">'+chain.map(function(c){return '<button data-act="open" data-id="'+c.id+'">'+esc(c.title||'Untitled')+'</button><span>›</span>'}).join('')+'<span>'+esc(f.title||'Footnote')+'</span></div>':'';
+  var crumbs=chain.length?'<div class="crumbs">'+chain.map(function(c){return '<button data-act="open" data-edit="1" data-id="'+c.id+'">'+esc(c.title||'Untitled')+'</button><span>\u203A</span>'}).join('')+'<span>'+esc(f.title||'Footnote')+'</span></div>':'';
   var nAn=(f.anchors||[]).length,nLn=(f.links||[]).filter(function(l){return S.frags[l.to]}).length;
   var seg='<div class="seg">'+[['text','Text'],['notes','Notes'+(nAn?' ('+nAn+')':'')],['links','Links'+(nLn?' ('+nLn+')':'')]].map(function(t){return '<button data-act="wtab" data-t="'+t[0]+'" class="'+(S.wtab===t[0]?'on':'')+'">'+t[1]+'</button>'}).join('')+'</div>';
-  var head=crumbs+'<input id="ftitle" value="'+esc(f.title)+'" placeholder="Title" autocomplete="off"><div class="fmeta"><select id="fstatus">'+STATUS.map(function(s){return '<option'+(s===f.status?' selected':'')+'>'+s+'</option>'}).join('')+'</select><input id="fvoice" value="'+esc(f.voice||'')+'" placeholder="voice" autocomplete="off"><span class="small" id="wcount">'+fmtN(wc(f.body))+' w</span><button class="icon" data-act="delfrag" aria-label="Delete fragment" style="font-size:16px">🗑</button></div>'+seg;
+  var head=crumbs+'<input id="ftitle" value="'+esc(f.title)+'" placeholder="Title" autocomplete="off"><div class="fmeta"><select id="fstatus">'+STATUS.map(function(s){return '<option'+(s===f.status?' selected':'')+'>'+s+'</option>'}).join('')+'</select><input id="fvoice" value="'+esc(f.voice||'')+'" placeholder="voice" autocomplete="off"><button class="btn" data-act="read" style="padding:6px 11px">Read</button><span class="small" id="wcount">'+fmtN(wc(f.body))+' w</span><button class="icon" data-act="delfrag" aria-label="Delete fragment" style="font-size:16px">🗑</button></div>'+seg;
   if(S.wtab==='text'){
     return '<div style="flex:none">'+head+'</div><textarea id="fbody" spellcheck="true" autocapitalize="sentences" placeholder="Write…"></textarea>'+
       '<div class="kbar">'+['note','query','motif','voice'].map(function(k){return '<button data-act="annot" data-k="'+k+'"><i style="background:'+KINDS[k].c+'"></i>'+KINDS[k].l+'</button>'}).join('')+'<button data-act="annot" data-k="footnote"><i style="background:'+KINDS.footnote.c+'"></i>Footnote †</button></div>';
@@ -636,9 +710,10 @@ function bindSearch(){
 }
 
 /* ---------- actions ---------- */
-function openFrag(id){
+function openFrag(id,edit){
   if(!S.frags[id])return;
-  S.cur=id;S.view='write';S.wtab='text';sel={s:0,e:0};render();
+  S.cur=id;S.view='write';S.wtab='text';S.mode=edit?'edit':'read';sel={s:0,e:0};render();
+  var mn=$('#main');if(mn)mn.scrollTop=0;
 }
 async function annotate(kind){
   var f=S.frags[S.cur];if(!f)return;
@@ -647,7 +722,7 @@ async function annotate(kind){
     var c=addFootnote(f,sel.e,'');
     var ta=$('#fbody');if(ta){ta.value=f.body}
     toast('Footnote added');
-    openFrag(c.id);
+    openFrag(c.id,true);
     return;
   }
   var s=sel.s,e=sel.e;
@@ -714,7 +789,7 @@ async function bookMenu(){
   }else if(k==='openbook')openBookFile();
   else if(k==='newpart'){
     var o=activeOrder(),pf=newFrag({kind:'part',title:'Part',status:'draft'});o.ids.push(pf.id);touchF(pf.id);touchMeta();
-    S.cur=pf.id;S.view='write';S.wtab='text';render();
+    S.cur=pf.id;S.view='write';S.wtab='text';S.mode='edit';render();
   }else if(k==='export')exportBook();
   else if(k==='import')importBook();
   else if(k==='importms')importManuscript();
@@ -729,7 +804,7 @@ async function bookMenu(){
 }
 function about(){
   ask('Palimpsest for the web',[],null,{note:
-'A browser edition of the Palimpsest writing app.\n\nIncluded: binder with several reading orders, status dots, word counts; plain-text editor; notes, queries, motifs and voice tags that follow the text as you edit; footnotes that are fragments with their own footnotes; typed links between fragments; research cards you can quote or cite into prose; search; manuscript import; compile to text; backup and restore.\n\nNot included: board and graph views, cast, allusion ledger, Claude assistant, rich text formatting, snapshots, PDF viewer, .docx import. Books from the native app open with Open .palimpsestbook file (text, order, footnotes, notes and research come across; formatting and attachments do not). Going back to the native app is not supported yet.\n\nWhere your data lives: on this device, and in your private storage for this page when it is available (the label at the top says which). Use Back up now and then.'});
+'A browser edition of the Palimpsest writing app.\n\nIncluded: binder with several reading orders, status dots, word counts; plain-text editor; notes, queries, motifs and voice tags that follow the text as you edit; footnotes that are fragments with their own footnotes; typed links between fragments; research cards you can quote or cite into prose; search; manuscript import; compile to text; backup and restore.\n\nNot included: board and graph views, cast, allusion ledger, Claude assistant, rich text formatting, snapshots, PDF viewer, .docx import. Books from the native app open with Open .palimpsestbook file (text, order, footnotes, notes and research come across; formatting and attachments do not). Going back to the native app is not supported yet.\n\nOpening a fragment shows it in a plain reading view first (tap \u2020 to read a footnote, Edit to write). Where your data lives: on this device, and in your private storage for this page when it is available (the label at the top says which). Use Back up now and then.'});
 }
 
 async function exportBook(){
@@ -956,8 +1031,13 @@ document.addEventListener('click',async function(e){
       if(b.dataset.v==='write'&&S.view==='write'){return}
       S.view=b.dataset.v;render();break;
     case 'menu':bookMenu();break;
-    case 'open':openFrag(id);break;
-    case 'openchild':openFrag(id);break;
+    case 'open':openFrag(id,!!b.dataset.edit);break;
+    case 'openchild':openFrag(id,true);break;
+    case 'rdback':{var cf0=S.frags[S.cur];if(cf0&&cf0.kind==='footnote'&&cf0.parent&&S.frags[cf0.parent])openFrag(cf0.parent);else{S.view='binder';render()}break}
+    case 'edit':S.mode='edit';render();break;
+    case 'read':trackSel();S.mode='read';render();break;
+    case 'rdsize':setRsize(parseInt(b.dataset.d,10));break;
+    case 'fn':fnSheet(id);break;
     case 'cyc':e.stopPropagation();cycleStatus(id);break;
     case 'up':e.stopPropagation();moveInOrder(id,-1);break;
     case 'down':e.stopPropagation();moveInOrder(id,1);break;
@@ -967,7 +1047,7 @@ document.addEventListener('click',async function(e){
     case 'ordermenu':orderMenu();break;
     case 'newfrag':{
       var o=activeOrder(),nf=newFrag({title:'',status:'idea'});o.ids.push(nf.id);touchF(nf.id);touchMeta();
-      S.cur=nf.id;S.view='write';S.wtab='text';sel={s:0,e:0};render();
+      S.cur=nf.id;S.view='write';S.wtab='text';S.mode='edit';sel={s:0,e:0};render();
       var t=$('#ftitle');if(t)setTimeout(function(){t.focus()},60);
       break}
     case 'sample':loadSample();break;
@@ -1009,7 +1089,7 @@ document.addEventListener('click',async function(e){
         var c=addFootnote(cf,pos,(r.source||r.title||'')+(r.source&&r.title?' ('+r.title+')':''));
         toast('Quoted with citation');
       }else toast('Quoted into '+(cf.title||'fragment'));
-      S.view='write';S.wtab='text';render();
+      S.view='write';S.wtab='text';S.mode='edit';render();
       break}
   }
 });
@@ -1019,6 +1099,7 @@ document.addEventListener('change',function(e){
 
 /* ---------- boot ---------- */
 (async function boot(){
+  try{var rs=parseInt(localStorage.getItem('palimpsest.rsize')||'',10);if(rs>=15&&rs<=32)S.rsize=rs}catch(e){}
   var had=await loadLocal();
   if(!had){S.book={title:'Untitled Book',orders:[{id:uid(),name:'Main',ids:[]}],active:null,updated:now()}}
   activeOrder();
