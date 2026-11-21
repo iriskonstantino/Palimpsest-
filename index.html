@@ -148,12 +148,22 @@ function activeOrder(){
 }
 
 /* ---------- persistence ---------- */
-function saveLocal(){try{localStorage.setItem(LS,JSON.stringify({book:S.book,frags:S.frags,res:S.res}))}catch(e){}}
-function loadLocal(){
-  try{
-    var j=JSON.parse(localStorage.getItem(LS)||'null');
-    if(j&&j.book){S.book=j.book;S.frags=j.frags||{};S.res=j.res||{};return true}
-  }catch(e){}
+var idb=null;
+function idbOpen(){return new Promise(function(res){try{var r=indexedDB.open('palimpsest',1);r.onupgradeneeded=function(){r.result.createObjectStore('kv')};r.onsuccess=function(){res(r.result)};r.onerror=function(){res(null)}}catch(e){res(null)}})}
+function idbGet(k){return new Promise(function(res){if(!idb)return res(null);try{var q=idb.transaction('kv').objectStore('kv').get(k);q.onsuccess=function(){res(q.result||null)};q.onerror=function(){res(null)}}catch(e){res(null)}})}
+function idbPut(k,v){return new Promise(function(res){if(!idb)return res(false);try{var t=idb.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=function(){res(true)};t.onerror=function(){res(false)};t.onabort=function(){res(false)}}catch(e){res(false)}})}
+var warnedSave=false;
+async function saveLocal(){
+  var snap={book:S.book,frags:S.frags,res:S.res};
+  var ok=await idbPut(LS,snap);
+  if(!ok){try{localStorage.setItem(LS,JSON.stringify(snap));ok=true}catch(e){}}
+  if(!ok&&!warnedSave){warnedSave=true;toast('Could not save on this device. Back up your book now.')}
+}
+async function loadLocal(){
+  idb=await idbOpen();
+  var j=await idbGet(LS);
+  if(!j){try{j=JSON.parse(localStorage.getItem(LS)||'null')}catch(e){}}
+  if(j&&j.book){S.book=j.book;S.frags=j.frags||{};S.res=j.res||{};return true}
   return false;
 }
 var localTmr=null, cloudTmr=null, flushing=false;
@@ -337,6 +347,7 @@ function compileBook(){
   parts.push(S.book.title.toUpperCase());
   o.ids.forEach(function(id){
     var f=S.frags[id];if(!f)return;
+    if(f.kind==='part'){parts.push('\u2014 '+(f.title||'Part').toUpperCase()+' \u2014');return}
     var c=compileFrag(f,'',0);
     var s=(f.title?f.title+'\n\n':'')+c.text.trim();
     if(c.notes.length)s+='\n\n'+c.notes.join('\n');
@@ -462,6 +473,10 @@ function render(){
 }
 
 function fragRow(f,mode,idx,len){
+  if(f.kind==='part'){
+    var pa=(mode==='in'&&S.editOrder)?'<div class="act"><button data-act="up" data-id="'+f.id+'"'+(idx===0?' disabled style="opacity:.3"':'')+'>\u25B2</button><button data-act="down" data-id="'+f.id+'"'+(idx===len-1?' disabled style="opacity:.3"':'')+'>\u25BC</button><button data-act="rmorder" data-id="'+f.id+'">\u2212</button></div>':(mode==='out'?'<div class="act"><button data-act="addorder" data-id="'+f.id+'">+</button></div>':'');
+    return '<div class="row" data-act="open" data-id="'+f.id+'" style="background:var(--paper)"><div class="mid"><div class="t" style="color:var(--gilt2);letter-spacing:.06em;text-transform:uppercase;font-size:15px">'+esc(f.title||'Part')+'</div><div class="m">Part divider</div></div>'+pa+'</div>';
+  }
   var qs=(f.anchors||[]).filter(function(a){return a.kind==='query'&&!a.done}).length;
   var fn=(f.anchors||[]).filter(function(a){return a.kind==='footnote'}).length;
   var meta=fmtN(wc(f.body))+' words'+(qs?' · '+qs+' open quer'+(qs>1?'ies':'y'):'')+(fn?' · '+fn+' †':'');
@@ -478,6 +493,7 @@ function viewBinder(){
   var o=activeOrder();
   var inO=new Set(o.ids);
   var rows=o.ids.map(function(id){return S.frags[id]}).filter(Boolean);
+  var nChap=rows.filter(function(f){return f.kind!=='part'}).length;
   var outs=Object.keys(S.frags).map(function(k){return S.frags[k]}).filter(function(f){return f.kind!=='footnote'&&!inO.has(f.id)}).sort(function(a,b){return (a.updated||0)-(b.updated||0)});
   var total=rows.reduce(function(n,f){return n+wc(f.body)},0);
   var h='<div class="bar"><select id="ordersel" aria-label="Reading order">'+S.book.orders.map(function(x){return '<option value="'+x.id+'"'+(x.id===o.id?' selected':'')+'>'+esc(x.name)+'</option>'}).join('')+'</select>'+
@@ -485,9 +501,9 @@ function viewBinder(){
     '<button class="btn'+(S.editOrder?' on':'')+'" data-act="toggleorder">'+(S.editOrder?'Done':'Reorder')+'</button>'+
     '<button class="btn pri" data-act="newfrag">+ New</button></div>';
   if(!rows.length&&!outs.length){
-    return h+'<div class="empty">A book is a graph of fragments.<br>Start with one.<br><br><button class="btn pri" data-act="newfrag">New fragment</button><button class="btn" data-act="sample">Load sample book</button><button class="btn" data-act="importms">Import manuscript</button></div>';
+    return h+'<div class="empty">A book is a graph of fragments.<br>Start with one.<br><br><button class="btn pri" data-act="newfrag">New fragment</button><button class="btn" data-act="openbook">Open book file</button><button class="btn" data-act="sample">Load sample book</button><button class="btn" data-act="importms">Import manuscript</button></div>';
   }
-  h+='<div class="sect">'+esc(o.name)+' · '+rows.length+' fragments · '+fmtN(total)+' words</div>';
+  h+='<div class="sect">'+esc(o.name)+' · '+nChap+' fragments \u00B7 '+fmtN(total)+' words</div>';
   h+=rows.map(function(f,i){return fragRow(f,'in',i,rows.length)}).join('')||'<div class="empty" style="padding:18px">Nothing in this order yet.</div>';
   if(outs.length){h+='<div class="sect">Not in this order</div>'+outs.map(function(f){return fragRow(f,'out')}).join('')}
   return h+'<div style="height:24px"></div>';
@@ -682,7 +698,9 @@ async function orderMenu(){
 
 async function bookMenu(){
   var k=await choose(S.book.title,[
+    {k:'openbook',l:'Open .palimpsestbook file',sub:'From the native Mac or iPhone app'},
     {k:'rename',l:'Rename book'},
+    {k:'newpart',l:'Add a Part divider'},
     {k:'export',l:'Back up book (JSON)',sub:'Keep a copy outside this app'},
     {k:'import',l:'Restore from backup'},
     {k:'importms',l:'Import manuscript text',sub:'Split pasted text into fragments'},
@@ -693,6 +711,10 @@ async function bookMenu(){
   if(k==='rename'){
     var v=await ask('Rename book',[{name:'t',label:'Title',value:S.book.title}],'Save');
     if(v&&v.t.trim()){S.book.title=v.t.trim();touchMeta();render()}
+  }else if(k==='openbook')openBookFile();
+  else if(k==='newpart'){
+    var o=activeOrder(),pf=newFrag({kind:'part',title:'Part',status:'draft'});o.ids.push(pf.id);touchF(pf.id);touchMeta();
+    S.cur=pf.id;S.view='write';S.wtab='text';render();
   }else if(k==='export')exportBook();
   else if(k==='import')importBook();
   else if(k==='importms')importManuscript();
@@ -707,7 +729,7 @@ async function bookMenu(){
 }
 function about(){
   ask('Palimpsest for the web',[],null,{note:
-'A browser edition of the Palimpsest writing app.\n\nIncluded: binder with several reading orders, status dots, word counts; plain-text editor; notes, queries, motifs and voice tags that follow the text as you edit; footnotes that are fragments with their own footnotes; typed links between fragments; research cards you can quote or cite into prose; search; manuscript import; compile to text; backup and restore.\n\nNot included: board and graph views, cast, allusion ledger, Claude assistant, rich text formatting, snapshots, PDF viewer, .docx import. Books made in the native app are not compatible with this one.\n\nWhere your data lives: on this device, and in your private storage for this page when it is available (the label at the top says which). Use Back up now and then.'});
+'A browser edition of the Palimpsest writing app.\n\nIncluded: binder with several reading orders, status dots, word counts; plain-text editor; notes, queries, motifs and voice tags that follow the text as you edit; footnotes that are fragments with their own footnotes; typed links between fragments; research cards you can quote or cite into prose; search; manuscript import; compile to text; backup and restore.\n\nNot included: board and graph views, cast, allusion ledger, Claude assistant, rich text formatting, snapshots, PDF viewer, .docx import. Books from the native app open with Open .palimpsestbook file (text, order, footnotes, notes and research come across; formatting and attachments do not). Going back to the native app is not supported yet.\n\nWhere your data lives: on this device, and in your private storage for this page when it is available (the label at the top says which). Use Back up now and then.'});
 }
 
 async function exportBook(){
@@ -715,16 +737,8 @@ async function exportBook(){
   var fn=(S.book.title.replace(/[^\w\- ]+/g,'').trim()||'Book')+'.palimpsest.json';
   saveFile(fn,data,'Backup');
 }
-async function importBook(){
-  var v=await ask('Restore from backup',[
-    {name:'json',label:'Paste backup JSON',type:'area',h:130},
-    {name:'f',label:'…or choose a backup file',type:'file',fill:'json',accept:'.json,application/json'},
-    {name:'mode',label:'How',type:'select',options:[{v:'merge',l:'Merge into this book'},{v:'replace',l:'Replace this book'}],value:'merge'}
-  ],'Restore');
-  if(!v)return;
-  var j;try{j=JSON.parse(v.json)}catch(e){toast('That is not valid JSON');return}
-  if(!j||j.format!=='palimpsest-web'||!j.book){toast('Not a Palimpsest web backup');return}
-  if(v.mode==='replace'){
+function applyBackupJson(j,mode){
+  if(mode==='replace'){
     Object.keys(S.frags).forEach(function(k){dirty.del.add('f_'+k)});
     Object.keys(S.res).forEach(function(k){dirty.del.add('r_'+k)});
     S.frags={};S.res={};S.book=j.book;
@@ -736,7 +750,133 @@ async function importBook(){
   }
   Object.keys(j.frags||{}).forEach(function(k){S.frags[k]=j.frags[k];dirty.del.delete('f_'+k);dirty.f.add(k)});
   Object.keys(j.res||{}).forEach(function(k){S.res[k]=j.res[k];dirty.del.delete('r_'+k);dirty.r.add(k)});
-  S.cur=null;activeOrder();touchMeta();render();toast('Restored');
+  S.cur=null;activeOrder();touchMeta();S.view='binder';render();toast('Restored');
+}
+async function importBook(){
+  var v=await ask('Restore from backup',[
+    {name:'json',label:'Paste backup JSON',type:'area',h:130},
+    {name:'f',label:'…or choose a backup file',type:'file',fill:'json'},
+    {name:'mode',label:'How',type:'select',options:[{v:'merge',l:'Merge into this book'},{v:'replace',l:'Replace this book'}],value:'merge'}
+  ],'Restore');
+  if(!v)return;
+  var j;try{j=JSON.parse(v.json)}catch(e){toast('That is not valid JSON');return}
+  if(!j||j.format!=='palimpsest-web'||!j.book){toast('Not a Palimpsest web backup');return}
+  applyBackupJson(j,v.mode);
+}
+
+/* ----- native .palimpsestbook files: "PALIMPSESTBOOK1\n" + deflate-compressed JSON ----- */
+var BOOK_MAGIC='PALIMPSESTBOOK1\n';
+async function inflateBytes(bytes){
+  async function run(fmt){
+    var ds=new DecompressionStream(fmt);
+    var w=ds.writable.getWriter();
+    w.write(bytes).catch(function(){});w.close().catch(function(){});
+    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  }
+  try{return await run('deflate-raw')}catch(e){return await run('deflate')}
+}
+async function decodeBookFile(buf){
+  var u=new Uint8Array(buf);
+  var head=new TextDecoder().decode(u.slice(0,BOOK_MAGIC.length));
+  if(head!==BOOK_MAGIC)throw new Error('This is not a Palimpsest book file.');
+  if(typeof DecompressionStream==='undefined')throw new Error('This browser cannot unpack book files. Update iOS and try again.');
+  var json=await inflateBytes(u.slice(BOOK_MAGIC.length));
+  var a=JSON.parse(new TextDecoder().decode(json));
+  if(!a||!Array.isArray(a.fragments))throw new Error('The book file is empty or damaged.');
+  return a;
+}
+function ms(sec){return sec?Math.round(sec*1000):now()}
+function archiveToWeb(a){
+  var frags={},res={},orders=[];
+  var sum={chapters:0,parts:0,footnotes:0,notes:0,research:0,cast:0,words:0,dropped:0};
+  (a.fragments||[]).forEach(function(x){
+    var kind=x.kind==='footnote'?'footnote':x.kind==='part'?'part':'fragment';
+    var f={id:x.id,title:x.title||(kind==='footnote'?'Footnote':''),body:x.plain||'',kind:kind,parent:x.parentID||null,
+      status:STATUS.indexOf(x.status)>=0?x.status:'draft',voice:x.voice||'',synopsis:x.synopsis||'',anchors:[],links:[],updated:ms(x.modified||x.created)};
+    frags[f.id]=f;
+    if(kind==='part')sum.parts++;else if(kind==='footnote')sum.footnotes++;else{sum.chapters++;sum.words+=wc(f.body)}
+  });
+  var kmap={note:'note',query:'query',motif:'motif',voice:'voice',footnote:'footnote',allusion:'note',research:'note'};
+  (a.annotations||[]).forEach(function(n){
+    var f=frags[n.fragmentID];if(!f)return;
+    var len=f.body.length,s=Math.max(0,Math.min(n.location|0,len)),e=Math.max(s,Math.min(s+(n.length|0),len));
+    var k=kmap[n.kind]||'note';
+    var an={id:n.id,kind:k,a:s,b:e,text:f.body.slice(s,e).slice(0,200),body:n.body||'',created:ms(n.created)};
+    if(k==='footnote'){
+      var cid=n.targetID;if(!cid||!frags[cid])return;
+      an.child=cid;an.body='';
+      if(e<=s){an.lost=true}
+    }else{
+      if(n.kind==='allusion')an.body='Allusion'+(an.body?': '+an.body:'');
+      else if(n.kind==='research')an.body='Research'+(an.body?': '+an.body:'');
+      if(e<=s)an.lost=true;
+    }
+    f.anchors.push(an);sum.notes++;
+  });
+  (a.links||[]).forEach(function(l){
+    if(frags[l.fromID]&&frags[l.toID])frags[l.fromID].links.push({to:l.toID,type:l.kind||'continues'});
+  });
+  (a.orders||[]).slice().sort(function(x,y){return (x.position||0)-(y.position||0)}).forEach(function(o){
+    orders.push({id:o.id,name:o.name||'Order',ids:(o.fragmentIDs||[]).filter(function(id){return frags[id]&&frags[id].kind!=='footnote'})});
+  });
+  var rmap={quote:'quote',source:'source',web:'link'};
+  (a.research||[]).forEach(function(r){
+    var text=r.body||'';
+    if(r.file||r.fileName){text+=(text?'\n\n':'')+'[Attached '+(r.kind||'file')+(r.fileName?' '+r.fileName:'')+' stays in the native app]';sum.dropped++}
+    res[r.id]={id:r.id,kind:rmap[r.kind]||'note',title:r.title||'',text:text,source:[r.source,r.citation].filter(Boolean).join(' · '),tags:(r.tags||[]).join(', '),updated:ms(r.modified||r.created)};
+    sum.research++;
+  });
+  (a.cast||[]).forEach(function(c){
+    var bits=[c.role,c.kind,(c.aliases&&c.aliases.length?'also: '+c.aliases.join(', '):''),c.notes].filter(Boolean);
+    var id='c'+c.id;
+    res[id]={id:id,kind:'note',title:c.name||'Cast member',text:bits.join('\n'),source:'',tags:'cast',updated:ms(c.created)};
+    sum.cast++;
+  });
+  return {title:a.title||'Imported book',frags:frags,res:res,orders:orders,sum:sum};
+}
+function applyArchive(w,mode){
+  if(mode==='replace'){
+    Object.keys(S.frags).forEach(function(k){dirty.del.add('f_'+k);dirty.f.delete(k)});
+    Object.keys(S.res).forEach(function(k){dirty.del.add('r_'+k);dirty.r.delete(k)});
+    S.frags={};S.res={};S.book.orders=[];S.book.title=w.title;
+  }
+  Object.keys(w.frags).forEach(function(k){S.frags[k]=w.frags[k];dirty.del.delete('f_'+k);dirty.f.add(k)});
+  Object.keys(w.res).forEach(function(k){S.res[k]=w.res[k];dirty.del.delete('r_'+k);dirty.r.add(k)});
+  w.orders.forEach(function(o){if(mode!=='replace')o.name=o.name+' (from '+w.title+')';S.book.orders.push(o)});
+  if(w.orders.length)S.book.active=w.orders[0].id;
+  S.cur=null;activeOrder();touchMeta();S.view='binder';render();
+  toast('Imported “'+w.title+'”');
+}
+async function handleBookBuffer(buf){
+  var head=new TextDecoder().decode(new Uint8Array(buf.slice(0,BOOK_MAGIC.length)));
+  if(head!==BOOK_MAGIC){
+    var txt='';try{txt=new TextDecoder().decode(new Uint8Array(buf))}catch(e){}
+    try{var j=JSON.parse(txt);if(j&&j.format==='palimpsest-web'&&j.book){
+      var mv=await ask('Restore backup',[{name:'mode',label:'How',type:'select',options:[{v:'merge',l:'Merge into this book'},{v:'replace',l:'Replace this book'}],value:'merge'}],'Restore');
+      if(mv)applyBackupJson(j,mv.mode);return}}catch(e){}
+    showText('Could not open that file','Choose a .palimpsestbook file exported from the Palimpsest app, or a backup made by this app.');return;
+  }
+  toast('Reading book…');
+  var w;
+  try{w=archiveToWeb(await decodeBookFile(buf))}
+  catch(e){showText('Could not read the book',(e&&e.message)||String(e));return}
+  var s=w.sum,empty=!Object.keys(S.frags).length;
+  var note='“'+w.title+'”: '+s.chapters+' chapters, '+s.parts+' parts, '+fmtN(s.words)+' words, '+s.footnotes+' footnotes, '+s.notes+' annotations, '+s.research+' research items, '+s.cast+' cast members (as research cards tagged cast).'+(s.dropped?'\n'+s.dropped+' attached files stay behind.':'')+'\n\nFormatting, the board layout and allusion links are not carried over; text, order and annotations are.';
+  var v=await ask('Import book file',[{name:'mode',label:'How',type:'select',options:empty?[{v:'replace',l:'Open as this book'}]:[{v:'merge',l:'Add to this book as new reading orders'},{v:'replace',l:'Replace this book'}],value:empty?'replace':'merge'}],'Import',{note:note,nofocus:true});
+  if(v)applyArchive(w,v.mode);
+}
+function openBookFile(){
+  var m=$('#modal');
+  m.innerHTML='<div class="mback"><div class="mbox" role="dialog"><h3>Open a book file</h3><p class="note">Choose a .palimpsestbook file exported from the Palimpsest app (on iPhone: save it to Files, or AirDrop it to the iPhone first). A backup file from this app works too.</p><input type="file" id="bkf" style="margin-top:10px"><div class="mbtns"><button type="button" class="ghost" data-x="1">Cancel</button></div></div></div>';
+  var back=m.querySelector('.mback'),inp=m.querySelector('#bkf');
+  back.addEventListener('click',function(e){if(e.target===back||e.target.closest('[data-x]'))closeModal()});
+  inp.addEventListener('change',function(){
+    var file=inp.files&&inp.files[0];if(!file)return;
+    var r=new FileReader();
+    r.onload=function(){closeModal();handleBookBuffer(r.result)};
+    r.onerror=function(){closeModal();toast('Could not read that file')};
+    r.readAsArrayBuffer(file);
+  });
 }
 
 function splitManuscript(text,scene){
@@ -831,6 +971,7 @@ document.addEventListener('click',async function(e){
       var t=$('#ftitle');if(t)setTimeout(function(){t.focus()},60);
       break}
     case 'sample':loadSample();break;
+    case 'openbook':openBookFile();break;
     case 'importms':importManuscript();break;
     case 'wtab':trackSel();S.wtab=b.dataset.t;render();break;
     case 'annot':annotate(b.dataset.k);break;
@@ -877,14 +1018,16 @@ document.addEventListener('change',function(e){
 });
 
 /* ---------- boot ---------- */
-var had=loadLocal();
-if(!had){S.book={title:'Untitled Book',orders:[{id:uid(),name:'Main',ids:[]}],active:null,updated:now()}}
-activeOrder();
-Object.keys(S.frags).forEach(function(k){var f=S.frags[k];f.anchors=f.anchors||[];f.links=f.links||[]});
-render();
-initSync();
-try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
-try{if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js')}catch(e){}
+(async function boot(){
+  var had=await loadLocal();
+  if(!had){S.book={title:'Untitled Book',orders:[{id:uid(),name:'Main',ids:[]}],active:null,updated:now()}}
+  activeOrder();
+  Object.keys(S.frags).forEach(function(k){var f=S.frags[k];f.anchors=f.anchors||[];f.links=f.links||[]});
+  render();
+  initSync();
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+  try{if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js')}catch(e){}
+})();
 
 })();
 </script>
